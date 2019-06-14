@@ -3,6 +3,7 @@
 Both process_image.py and process_video.py are scripts that can be run. Use the following commands: 
 
   python process_image.py -i [image_path]
+  
   python process_video.py -v [video_path]
   
 When process_video.py is run, the user sees six windows. The "original" window shows the current point of 
