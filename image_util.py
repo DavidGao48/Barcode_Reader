@@ -52,6 +52,24 @@ def correct_degree(degree):
 
     return degree
 
+def contour_resembles_barcode(contour):
+
+    if cv2.contourArea(contour) >= 14000: return True
+
+    rect = cv2.minAreaRect(contour)
+    height = rect[1][0]
+    width = rect[1][1]
+    angle = correct_degree(rect[-1])
+
+    contour_area = cv2.contourArea(contour)
+    rect_area = height * width
+    area_diff = rect_area - contour_area
+
+    return (area_diff < 0.4 * rect_area) \
+           and (cv2.contourArea(contour) > 1000) \
+           and (-15 < angle and angle < 15)  \
+           and ((4 < width / height and width/height < 10) or (0.5 < width / height and width / height < 2))
+
 '''
 \brief Increases the color image contrast.
 \note Inspired by this answer: https://stackoverflow.com/questions/19363293/whats-the-fastest-way-to-increase-color-image-contrast-with-opencv-in-python-c/19384041
@@ -146,7 +164,7 @@ def crop_around_rect(image, rect):
 
     # Add padding proportional to the sqrt of the area of the box
     x_padding = 0.1 * (np.sqrt((x2 - x1) * (y2 - y1)))
-    y_padding = 0.25 * (y2 - y1)
+    y_padding = 0.1 * (np.sqrt((x2 - x1) * (y2 - y1)))
     if (x1 >= x_padding): x1 -= x_padding
     else: x1 = 0
     if (y1 >= y_padding): y1 -= y_padding
@@ -160,17 +178,20 @@ def crop_around_rect(image, rect):
     result = image[int(y1):int(y2), int(x1):int(x2)]
 
     # Rotate the image so that barcode is upright
-    M = cv2.getRotationMatrix2D((w / 2, h / 2), correct_degree(rect[-1]) + 1, 1)
+    M = cv2.getRotationMatrix2D((w / 2 + x_padding, h / 2 + y_padding), correct_degree(rect[-1]), 1)
     result = cv2.warpAffine(result, M, (int(x2) - int(x1), int(y2) - int(y1)))
     # Equalize the image
     result = adaptiveHistogram(result)
     just_equalized = result
+
     # Binary threshold the image
     _, result = cv2.threshold(result, 150, 255, cv2.THRESH_BINARY)
+
     # Convert to gray scale
     result = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+
     # Threshold again
- #   _, result = cv2.threshold(result, 150, 225, cv2.THRESH_BINARY)
+    _, result = cv2.threshold(result, 150, 255, cv2.THRESH_BINARY)
 
 
     '''
@@ -216,27 +237,29 @@ def extra_processing(processed_image, plain_image, vertical_padding_removal):
     # take the brightest of thresholded channels as a gray scale
     result = np.max(sep_thresh, 2)
 
+    '''
     vert_removed = result[vertical_padding_removal: h - vertical_padding_removal, :]
     vert_collapsed = np.sum(vert_removed, 0) / (h - 2 * vertical_padding_removal) / 255
     for x in range (0, w):
         result[vertical_padding_removal:h - vertical_padding_removal, x] = vert_collapsed[x] * np.ones((h - 2 * vertical_padding_removal))
 
     _, result = cv2.threshold(result, 0.5, 1, cv2.THRESH_BINARY)
-
     '''
+
+
     # any vertical line that contains a sufficiently long line of black should be all black
     for x in range(0, w):
-        this_column = result[60:h-60, x]
-        this_column = np.reshape(this_column, (h-120))
+        this_column = result[vertical_padding_removal:h-vertical_padding_removal, x]
         if (contains_consecutive_with_length(this_column, 30, 0)):
-            result[60:h-60, x] = np.zeros((h-120))
-    '''
+            result[vertical_padding_removal:h-vertical_padding_removal, x] = np.zeros((h-2 * vertical_padding_removal))
 
+    '''
     # any vertical line that contains sufficient density of black should be all black
     for x in range(0, w):
         this_column = result[vertical_padding_removal:h-vertical_padding_removal, x]
         if (sufficient_density(this_column, 0.2, 0)):
             result[vertical_padding_removal:h-vertical_padding_removal, x] = np.zeros((h-2*vertical_padding_removal))
+    '''
 
     # any vertical line that still contains a sufficiently long line of white should be all white
     for x in range(0, w):
@@ -293,8 +316,6 @@ def preprocess_image(image):
     gradient_diff = cv2.subtract(gradX, gradY)
     gradient_diff = cv2.convertScaleAbs(gradient_diff)
 
- #   cv2.imshow("gradient", cv2.resize(gradient_diff, (960, 640)))
-
     # blur and threshold the image
     blurred = cv2.blur(gradient_diff, (9, 9))
     (_, thresh) = cv2.threshold(blurred, 225, 225, cv2.THRESH_BINARY)
@@ -316,46 +337,22 @@ def preprocess_image(image):
 
     if (len(cnts) == 0): return []
 
-    if (len(cnts) == 1):
+    filtered_cnts = filter(lambda c: contour_resembles_barcode(c), cnts)
+    result_parts = []
 
-        c = cnts[0]
-
-        # compute the rotated bounding box of the largest contour
+    for c in filtered_cnts:
+        # compute the rotated bounding box of the largest 2 contours
         rect = cv2.minAreaRect(c)
         box = cv2.cv.BoxPoints(rect) if imutils.is_cv2() else cv2.boxPoints(rect)
         box = np.int0(box)
+
         # draw a bounding box around the detected barcode
-        #cv2.drawContours(frame, [box], -1, (0, 255, 0), 2)
+        # cv2.drawContours(frame, [box], -1, (0, 255, 0), 2)
 
         # compute the matrix of the rotation needed
-        #rows, cols, _ = frame.shape
-        #M = cv2.getRotationMatrix2D((cols/2, rows/2), correct_degree(rect[-1]), 1)
-
+        # rows, cols, _ = frame.shape
+        # M = cv2.getRotationMatrix2D((cols/2, rows/2), correct_degree(rect[-1]), 1)
         result_part, plain_part = crop_around_rect(image, rect)
-        # rotate the frame
-        result_parts = [(result_part, plain_part, box)]
+        result_parts += [(result_part, plain_part, box)]
 
-        return result_parts
-
-    else:
-
-        filtered_cnts = filter(lambda c: cv2.contourArea(c) > 14000, cnts)
-
-        result_parts = []
-
-        for c in filtered_cnts:
-            # compute the rotated bounding box of the largest 2 contours
-            rect = cv2.minAreaRect(c)
-            box = cv2.cv.BoxPoints(rect) if imutils.is_cv2() else cv2.boxPoints(rect)
-            box = np.int0(box)
-
-            # draw a bounding box around the detected barcode
-            # cv2.drawContours(frame, [box], -1, (0, 255, 0), 2)
-
-            # compute the matrix of the rotation needed
-            # rows, cols, _ = frame.shape
-            # M = cv2.getRotationMatrix2D((cols/2, rows/2), correct_degree(rect[-1]), 1)
-            result_part, plain_part = crop_around_rect(image, rect)
-            result_parts += [(result_part, plain_part, box)]
-
-        return result_parts
+    return result_parts
