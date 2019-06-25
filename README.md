@@ -1,6 +1,6 @@
 # Barcode_Reader
 
-Both process_image.py and process_video.py are scripts that can be run. Use the following commands: 
+Both process_image.py and process_video.py are runnable. Use the following commands: 
 
   python process_image.py -i [image_path]
   
