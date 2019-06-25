@@ -2,8 +2,11 @@ from pyzbar import pyzbar
 import argparse
 from image_util import *
 
-
-
+'''
+\:brief Uses ZBar to find and decode all barcodes in an image 
+\:param image An image to be decoded 
+\:returns void. But edits the image to show bounding boxes and text around decoded barcodes. 
+'''
 def decode_image(image):
 
     barcodes = pyzbar.decode(image)
