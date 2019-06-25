@@ -8,6 +8,14 @@ import imutils
 from image_util import extra_processing
 from image_util import preprocess_image
 
+'''
+\:brief Uses ZBar to decode barcodes in a video 
+\:param video_path The path to the video file 
+\:param output_path The path to the file where information about all scanned barcodes should be written
+\:returns void. But creates two files: annotated.avi holds an annotated video with bounding boxes and 
+            text info around all scanned barcodes, and [output_path] holds information of each scanned 
+            barcode in csv format. 
+'''
 def process_video(video_path, output_path):
 
     # initialize video stream
