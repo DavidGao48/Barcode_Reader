@@ -9,15 +9,18 @@ import matplotlib.pyplot as plt
 #Helpers
 #########################
 
+'''
+\:brief Helper function; finds if a 1d array contains a sufficiently long subarray of a certain value 
+\:note O(length of array) 
+\:param a An ndarray, required to be 1d
+\:param length The length of the subarray we are looking for 
+\:param consec_val The value we want each entry in the subarray to be 
+\:returns boolean True iff a contains sufficiently long subarray of consecutive consec_val's. 
+'''
 def contains_consecutive_with_length(a: np.ndarray, length, consec_val):
     array_length = a.shape[0]
     if (array_length < length):
         return False
-    '''
-    for i in range(0, array_length - length):
-        if (a[i:i+length] == consec_val * np.ones((length))).all():
-            return True
-    '''
 
     max_length = 0
     temp_count = 0
@@ -35,11 +38,24 @@ def contains_consecutive_with_length(a: np.ndarray, length, consec_val):
 
     return False
 
+'''
+\:brief Helper function; finds if a 1d array contains a certain value at a sufficient density 
+\:note O(length of array)
+\:param a An array, required to be 1d. 
+\:param density The density wanted. 
+\:param val The value to be counted. 
+\:returns boolean True iff a contains suffient density of val. 
+'''
 def sufficient_density(a: np.ndarray, density, val):
     count = (a == val).sum()
     length = a.shape[0]
     return count >= length * density
 
+'''
+\brief Helper function; gets the minimum degree of rotation needed to straighten a rotated rect
+\param[in] degree The angle given by rect[-1]
+\returns double The correct degree 
+'''
 def correct_degree(degree):
     sign = 1 if degree >= 0 else -1
     threshold = 80.0
@@ -52,15 +68,23 @@ def correct_degree(degree):
 
     return degree
 
+'''
+\brief Sanity checks if a contour looks anything like the outline of a barcode 
+\param[in] contour The contour that needs to be judged. 
+\returns boolean False iff the contour is unlikely to be the outline of a barcode 
+'''
 def contour_resembles_barcode(contour):
-
+    # Any contour sufficiently large deserve to be tried
+    # TODO this is only a temporary measure to boost performance in high quality videos
     if cv2.contourArea(contour) >= 14000: return True
 
+    # Find the minimum bounding rectangle (may be rotated) of the contour
     rect = cv2.minAreaRect(contour)
     height = rect[1][0]
     width = rect[1][1]
     angle = correct_degree(rect[-1])
 
+    # Find the difference in area between the bounding rect and the contour
     contour_area = cv2.contourArea(contour)
     rect_area = height * width
     area_diff = rect_area - contour_area
@@ -152,6 +176,13 @@ def sharpening(img, a=0.3, b=1.5, c=-0.5):
     img  = cv2.addWeighted(blur, b, img, c, 0)
     return img
 
+#TODO This function needs to be separated into two functions: crop_around_rect and preprocess_cropped_part
+'''
+\:brief Crops and preprocesses a part of an image for barcode decoding
+\:param image The original image (likely a frame in a video) 
+\:rect rect The (rotated) bbox around which we wish to crop 
+\:returns UMat a cv2 Mat representing the cropped and preprocessed part of image inside rect 
+'''
 def crop_around_rect(image, rect):
     box = cv2.cv.BoxPoints(rect) if imutils.is_cv2() else cv2.boxPoints(rect)
     h, w, _ = image.shape
@@ -180,18 +211,17 @@ def crop_around_rect(image, rect):
     # Rotate the image so that barcode is upright
     M = cv2.getRotationMatrix2D((w / 2 + x_padding, h / 2 + y_padding), correct_degree(rect[-1]), 1)
     result = cv2.warpAffine(result, M, (int(x2) - int(x1), int(y2) - int(y1)))
-    # Equalize the image
-    result = adaptiveHistogram(result)
-    just_equalized = result
 
-    # Binary threshold the image
-    _, result = cv2.threshold(result, 150, 255, cv2.THRESH_BINARY)
+    just_cropped = result
+
+    # Resize cropped part
+    result = imutils.resize(result, width = 1000)
 
     # Convert to gray scale
     result = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
 
     # Threshold again
-    _, result = cv2.threshold(result, 150, 255, cv2.THRESH_BINARY)
+    _, result = cv2.threshold(result, 140, 255, cv2.THRESH_BINARY)
 
 
     '''
@@ -215,8 +245,12 @@ def crop_around_rect(image, rect):
  #   cv2.imshow("cropped", result)
  #   cv2.waitKey(100)
 
-    return result, just_equalized
+    return result, just_cropped
 
+#TODO This function is currently not in use. Need to assess whether it should be removed.
+'''
+\:brief More expensive option for processing a cropped part extra finely for barcode decoding 
+'''
 def extra_processing(processed_image, plain_image, vertical_padding_removal):
     result = np.asarray(plain_image)
     h, w, c = result.shape
@@ -302,6 +336,14 @@ def extra_processing(processed_image, plain_image, vertical_padding_removal):
 # body
 #########################
 
+'''
+\:brief Preprocesses an image for barcode decoding 
+\:param image The original image, likely a frame of a video
+\:returns a list of tuples of the form (result_part, plain_part, box), where 
+            each result_part is a processed cropped part (containing a barcode) of the image 
+            plain_part is the corresponding non-processed, cropped part (containing a barcode) of the image 
+            each box is the corresponding bbox of that cropped part 
+'''
 def preprocess_image(image):
     # Convert frame to grayscale
     gray_frame = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
