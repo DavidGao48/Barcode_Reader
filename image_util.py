@@ -398,3 +398,14 @@ def preprocess_image(image):
         result_parts += [(result_part, plain_part, box)]
 
     return result_parts
+
+
+'''
+boxes_intersect (helper) 
+\:brief checks if two boxes intersect 
+\:param box1, box2: two boxes, in the form (left, top, right, bottom) 
+'''
+def boxes_intersect(box1, box2):
+    intersect_in_x = (box2[0] < box1[0] < box2[2]) or (box1[0] < box2[0] < box1[2])
+    intersect_in_y = (box2[1] < box1[1] < box2[3]) or (box1[1] < box2[1] < box1[3])
+    return intersect_in_x and intersect_in_y
