@@ -1,4 +1,3 @@
-import datetime
 import time
 import cv2
 from pyzbar import pyzbar
@@ -19,7 +18,7 @@ and decoding frames as individual images
 \:param fourcc the fourcc code of the output format, leave as default if no video output needed, defaults to XVID 
 '''
 class Video_Processor():
-    def __init__(self, video_path, out_video_path = None, fourcc = 'XVID'):
+    def __init__(self, video_path, out_video_path = None, fourcc = 'XVID', is_live = False):
         ## Open video file and create video capture
         print("[Video Processor] Starting video stream... ")
         self.video_path = video_path
@@ -42,6 +41,8 @@ class Video_Processor():
         self.annotated_frame = None
         self.framecount = 0
         self.video_time = 0
+
+        self.is_live = is_live
 
     '''
     step 
@@ -106,6 +107,29 @@ class Video_Processor():
             return True
 
         return False
+
+    def step_til_end(self):
+        try:
+            ret = True
+            while ret:
+                ret, self.frame = self.video.read()
+            if self.frame is None:
+                return False
+            return True
+        except Exception:
+            return False
+    '''
+    estimate_frame_readability 
+    \:
+    '''
+    def estimate_frame_readability(self, input_size = None):
+        ## Resize frame to input size
+        if not input_size is None:
+            frame_copy = cv2.resize(self.frame, input_size)
+        else:
+            frame_copy = self.frame
+        ## Compute variance of Laplacian over frame and return
+        return cv2.Laplacian(frame_copy, cv2.CV_64F).var()
 
     '''
     decode_frame 
@@ -213,25 +237,60 @@ class Video_Processor():
     '''
     run 
     \:brief runs the Video_Processor through the assigned video 
-    \:param step_size the number of frames to skip at each step; defaults to 1
+    \:param step_size the number of frames to skip at each step; if 0 then step sizes are automatically optimized 
+                      by frame readability. defaults to 0
     \:param show_monitors should monitors be displayed? defaults to True 
     '''
-    def run(self, step_size = 1, show_monitors = True, csv_path = None, resolution_cap = None):
+    def run(self, step_size = 0, show_monitors = True, csv_path = None, resolution_cap = None):
         ## Step into first frame
         self.step()
 
-        while True:
-            ## Decode current frame
-            if not resolution_cap is None:
+        ## Case where step size is user defined
+        if step_size != 0:
+            while True:
+                ## Decode current frame
                 self.decode_frame(input_size = resolution_cap)
-            else:
-                self.decode_frame()
-            ## Display monitors
-            if show_monitors:
-                self.show_monitors()
-            ## Step to next frame, and break if no such frame
-            if not self.step(frames = step_size):
-                break
+
+                ## Display monitors
+                if show_monitors:
+                    self.show_monitors()
+
+                ## Step to next frame, and break if no such frame
+                if not self.step(frames = step_size):
+                    break
+
+        ## Case where step size needs automatic optimization
+        else:
+            ## Setup queue of readability scores
+            score_queue = [0]
+            adap_mean = 0
+            adap_var = 0
+            while True:
+                ## update queue and adaptive params
+                curr_score = self.estimate_frame_readability(input_size = resolution_cap)
+                score_queue.append(curr_score)
+                adap_mean = (adap_mean * (len(score_queue) - 1) + curr_score) / len(score_queue)
+                adap_var = (adap_var * (len(score_queue) - 1) + (curr_score - adap_mean) ** 2) / len(score_queue)
+                if len(score_queue) > 50:
+                    removed = score_queue.pop(0)
+                    adap_mean = (adap_mean * (len(score_queue) + 1) - removed) / len(score_queue)
+                    adap_var = (adap_var * (len(score_queue) - 1) - (removed - adap_mean) ** 2) / len(score_queue)
+
+                ## Decode frame if current score is greater than one standard deviation away from mean of score queue
+                if curr_score >= adap_mean + 0 * (adap_var ** 0.5):
+                    print("Decoding! ")
+                    self.decode_frame(input_size = resolution_cap)
+
+                ## Display monitors
+                if show_monitors:
+                    self.show_monitors()
+
+                ## Step to next frame, and break if no such frame
+                if not self.step(frames = 4):
+                    break
+
+                if self.is_live and not csv_path is None:
+                    self.dump_data(csv_path)
 
         ## Dump results
         if not csv_path is None:
@@ -344,5 +403,11 @@ class Video_Processor():
         self.close()
         return (frame_wise_precision, frame_wise_recall, object_wise_recall)
 
-video_processor = Video_Processor("../Images/2019_07_11_17_36_48 - 60FPS.mp4", out_video_path="annotated_low_5.avi")
-video_processor.run(csv_path = "detections_low_5.csv")
+parser = argparse.ArgumentParser(description = 'Tool for barcode detection in local video or video stream. ')
+parser.add_argument("video_address", type = str, help = 'path to a local video, or ip address of video stream')
+args = vars(parser.parse_args())
+
+video_processor = Video_Processor(args["video_address"], out_video_path="annotated.avi", is_live=True)
+video_processor.run(csv_path = "detections.csv", step_size = 1)
+
+
