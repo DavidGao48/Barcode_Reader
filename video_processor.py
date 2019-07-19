@@ -4,6 +4,7 @@ from pyzbar import pyzbar
 import argparse
 import imutils
 import json
+import threading
 
 from image_util import extra_processing
 from image_util import preprocess_image
@@ -18,18 +19,23 @@ and decoding frames as individual images
 \:param fourcc the fourcc code of the output format, leave as default if no video output needed, defaults to XVID 
 '''
 class Video_Processor():
-    def __init__(self, video_path, out_video_path = None, fourcc = 'XVID', is_live = False):
+    def __init__(self, video_path, annotated_video_path = None, recorded_video_path = None, fourcc ='XVID', is_live = False):
         ## Open video file and create video capture
         print("[Video Processor] Starting video stream... ")
         self.video_path = video_path
         self.video = cv2.VideoCapture(self.video_path)
 
-        ## Check if we want to write an annotated video and create resources
-        self.write_annotated_vid = (not out_video_path is None)
+        ## Check if we want to write to video(s) and create resources
+        self.write_recorded_vid = (not recorded_video_path is None)
+        self.write_annotated_vid = (not annotated_video_path is None)
+        if self.write_recorded_vid:
+            print("[Video Processor] Opening recording video file location... ")
+            self.fourcc = cv2.cv.CV_FOURCC(*fourcc) if imutils.is_cv2() else cv2.VideoWriter_fourcc(*fourcc)
+            self.recorded_video = cv2.VideoWriter(recorded_video_path, self.fourcc, 20.0, (1440, 960))
         if self.write_annotated_vid:
             print("[Video Processor] Opening annotated video file location... ")
             self.fourcc = cv2.cv.CV_FOURCC(*fourcc) if imutils.is_cv2() else cv2.VideoWriter_fourcc(*fourcc)
-            self.annotated_video = cv2.VideoWriter(out_video_path, self.fourcc, 20.0, (1440, 960))
+            self.annotated_video = cv2.VideoWriter(annotated_video_path, self.fourcc, 20.0, (1440, 960))
 
         ## Wait for resources to finish opening
         time.sleep(2.0)
@@ -43,7 +49,17 @@ class Video_Processor():
         self.video_time = 0
 
         self.is_live = is_live
+        if self.is_live:
+            self.frameholder = None
+            t = threading.Thread(target = self._stream_follower)
+            t.daemon = True
+            t.start()
 
+    def _stream_follower(self):
+        while True:
+            ret, self.frameholder = self.video.read()
+            if (not ret) or (self.frameholder is None):
+                break
     '''
     step 
     \:brief takes a few frames forwards in video 
@@ -51,12 +67,29 @@ class Video_Processor():
     \:returns a boolean representing whether there were still enough frames left in video 
     '''
     def step(self, frames = 1):
+        if self.is_live:
+            try:
+                self.frame = self.frameholder
+                self.annotated_frame = self.frame.copy()
+
+                self.framecount = self.video.get(cv2.CAP_PROP_POS_FRAMES)
+                self.video_time = self.video.get(cv2.CAP_PROP_POS_MSEC)
+                self.curr_frame_barcodes = []
+
+                print("[Video Processor] We are at frame number {} and time {} seconds".format(self.framecount, self.video_time / 1000))
+
+                return not self.frame is None
+            except Exception:
+                return False
+
         video_cont = True
         ## Take frames steps forward
         for i in range(frames):
             if self.write_annotated_vid and not self.annotated_frame is None:
                 to_write = cv2.resize(self.annotated_frame, (1440, 960))
                 self.annotated_video.write(to_write)
+            if self.write_recorded_vid and not self.frame is None:
+                self.recorded_video.write(self.frame)
 
             (grabbed, self.frame) = self.video.read()
 
@@ -85,6 +118,9 @@ class Video_Processor():
     \:returns a boolean representing whether there is such a frame
     '''
     def jump(self, frame_num):
+        if self.is_live:
+            raise Exception('Cannot jump frames in live stream. ')
+
         if self.write_annotated_vid and not self.annotated_frame is None:
             to_write = cv2.resize(self.annotated_frame, (1440, 960))
             self.annotated_video.write(to_write)
@@ -108,16 +144,6 @@ class Video_Processor():
 
         return False
 
-    def step_til_end(self):
-        try:
-            ret = True
-            while ret:
-                ret, self.frame = self.video.read()
-            if self.frame is None:
-                return False
-            return True
-        except Exception:
-            return False
     '''
     estimate_frame_readability 
     \:
@@ -243,7 +269,9 @@ class Video_Processor():
     '''
     def run(self, step_size = 0, show_monitors = True, csv_path = None, resolution_cap = None):
         ## Step into first frame
-        self.step()
+        while not self.step():
+            print("[Video Processor] Waiting for stream to connect... ")
+            time.sleep(2.0)
 
         ## Case where step size is user defined
         if step_size != 0:
@@ -267,18 +295,18 @@ class Video_Processor():
             adap_var = 0
             while True:
                 ## update queue and adaptive params
-                curr_score = self.estimate_frame_readability(input_size = resolution_cap)
-                score_queue.append(curr_score)
-                adap_mean = (adap_mean * (len(score_queue) - 1) + curr_score) / len(score_queue)
-                adap_var = (adap_var * (len(score_queue) - 1) + (curr_score - adap_mean) ** 2) / len(score_queue)
-                if len(score_queue) > 50:
-                    removed = score_queue.pop(0)
-                    adap_mean = (adap_mean * (len(score_queue) + 1) - removed) / len(score_queue)
-                    adap_var = (adap_var * (len(score_queue) - 1) - (removed - adap_mean) ** 2) / len(score_queue)
+                #curr_score = self.estimate_frame_readability(input_size = resolution_cap)
+                #score_queue.append(curr_score)
+                #adap_mean = (adap_mean * (len(score_queue) - 1) + curr_score) / len(score_queue)
+                #adap_var = (adap_var * (len(score_queue) - 1) + (curr_score - adap_mean) ** 2) / len(score_queue)
+                #if len(score_queue) > 50:
+                #    removed = score_queue.pop(0)
+                #    adap_mean = (adap_mean * (len(score_queue) + 1) - removed) / len(score_queue)
+                #    adap_var = (adap_var * (len(score_queue) - 1) - (removed - adap_mean) ** 2) / len(score_queue)
 
                 ## Decode frame if current score is greater than one standard deviation away from mean of score queue
-                if curr_score >= adap_mean + 0 * (adap_var ** 0.5):
-                    print("Decoding! ")
+                # if curr_score >= adap_mean + 0 * (adap_var ** 0.5):
+                if True:
                     self.decode_frame(input_size = resolution_cap)
 
                 ## Display monitors
@@ -286,7 +314,9 @@ class Video_Processor():
                     self.show_monitors()
 
                 ## Step to next frame, and break if no such frame
-                if not self.step(frames = 4):
+                if (not self.is_live) and (not self.step(frames = 1)):
+                    break
+                elif self.is_live and (not self.step()):
                     break
 
                 if self.is_live and not csv_path is None:
@@ -405,9 +435,12 @@ class Video_Processor():
 
 parser = argparse.ArgumentParser(description = 'Tool for barcode detection in local video or video stream. ')
 parser.add_argument("video_address", type = str, help = 'path to a local video, or ip address of video stream')
+parser.add_argument("-a", "--annotated_output", type = str, default = None, help = "path to save annotated video")
+parser.add_argument("-r", "--record_output", type = str, default = None, help = "path to save video")
+parser.add_argument("-o", "--output", type = str, default = "detections.csv", help = "path to save detection data")
 args = vars(parser.parse_args())
 
-video_processor = Video_Processor(args["video_address"], out_video_path="annotated.avi", is_live=True)
-video_processor.run(csv_path = "detections.csv", step_size = 1)
+video_processor = Video_Processor(args["video_address"], annotated_video_path=args["annotated_output"], is_live=True)
+video_processor.run(csv_path = args["output"])
 
 
